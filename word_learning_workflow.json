@@ -1,0 +1,127 @@
+{
+  "name": "Daily English Word Learning Bot",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 * * *"
+            }
+          ]
+        }
+      },
+      "id": "cron-trigger",
+      "name": "Daily Trigger",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [
+        280,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "serviceAccountEmail": "YOUR_SERVICE_ACCOUNT_EMAIL",
+        "privateKey": "YOUR_PRIVATE_KEY",
+        "documentId": "1xmd9JXVtz4GspNB_9_8u4V-So4nxfgHCG0PJ04C91Ng",
+        "sheetName": "Sheet1",
+        "range": "A:A",
+        "options": {}
+      },
+      "id": "read-words",
+      "name": "Read English Words",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        500,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Filter and select random word from Google Sheets data\nconst items = $input.all();\nconst wordList = [];\n\n// Extract words from Google Sheets response\nfor (const item of items) {\n  if (item.json.A && typeof item.json.A === 'string' && item.json.A.trim().length > 0) {\n    const word = item.json.A.trim().toLowerCase();\n    // Skip potential headers\n    if (!['word', 'english', 'words'].includes(word)) {\n      wordList.push(word);\n    }\n  }\n}\n\n// Select random word\nif (wordList.length === 0) {\n  throw new Error('No valid words found in the sheet');\n}\n\nconst selectedWord = wordList[Math.floor(Math.random() * wordList.length)];\n\nreturn [{\n  json: {\n    selectedWord: selectedWord,\n    totalWords: wordList.length\n  }\n}];"
+      },
+      "id": "select-word",
+      "name": "Select Random Word",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "operation": "create",
+        "model": "gpt-4",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are a language learning assistant. Given an English word, generate 10 related words in the same semantic field or category. Provide Dutch translations for each word. Respond only in JSON format with the structure: {\"category\": \"category_name\", \"related_words\": [{\"dutch\": \"dutch_word\", \"english\": \"english_word\"}], \"error\": \"\"}"
+            },
+            {
+              "role": "user",
+              "content": "=Generate 10 related words for: {{ $json.selectedWord }}"
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.7,
+          "maxTokens": 800
+        }
+      },
+      "id": "openai-generate",
+      "name": "Generate Related Words",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        940,
+        300
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "YOUR_OPENAI_CREDENTIAL_ID",
+          "name": "OpenAI API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse OpenAI response and prepare data\nconst item = $input.first();\nlet aiResponse;\nlet parsedResponse;\n\ntry {\n  // Extract the AI response content\n  const content = item.json.choices[0].message.content;\n  parsedResponse = JSON.parse(content);\n  \n  // Validate the response structure\n  if (!parsedResponse.category || !Array.isArray(parsedResponse.related_words)) {\n    throw new Error('Invalid response structure from AI');\n  }\n  \n} catch (error) {\n  // Fallback response on error\n  parsedResponse = {\n    category: 'error',\n    related_words: [],\n    error: 'Failed to parse AI response: ' + error.message\n  };\n}\n\n// Get the original word from previous step\nconst selectedWord = $('Select Random Word').first().json.selectedWord;\n\n// Prepare data for Google Sheets\nconst currentDate = new Date().toISOString().split('T')[0];\nconst sheetRows = [];\n\nif (parsedResponse.related_words && parsedResponse.related_words.length > 0) {\n  for (const wordPair of parsedResponse.related_words) {\n    sheetRows.push({\n      Date: currentDate,\n      Original_Word: selectedWord,\n      Category: parsedResponse.category,\n      Dutch_Word: wordPair.dutch,\n      English_Word: wordPair.english\n    });\n  }\n} else {\n  // Add error row if no words generated\n  sheetRows.push({\n    Date: currentDate,\n    Original_Word: selectedWord,\n    Category: 'error',\n    Dutch_Word: '',\n    English_Word: parsedResponse.error || 'No words generated'\n  });\n}\n\nreturn [{\n  json: {\n    selectedWord: selectedWord,\n    parsedResponse: parsedResponse,\n    sheetRows: sheetRows,\n    currentDate: currentDate\n  }\n}];"
+      },
+      "id": "parse-response",
+      "name": "Parse AI Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1160,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Split the data into individual rows for Google Sheets append\nconst item = $input.first();\nconst sheetRows = item.json.sheetRows;\n\n// Convert each row to the format expected by Google Sheets\nconst output = [];\nfor (const row of sheetRows) {\n  output.push({\n    json: {\n      Date: row.Date,\n      Original_Word: row.Original_Word,\n      Category: row.Category,\n      Dutch_Word: row.Dutch_Word,\n      English_Word: row.English_Word\n    }\n  });\n}\n\nreturn output;"
+      },
+      "id": "prepare-sheet-data",
+      "name": "Prepare Sheet Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1380,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": "1xmd9JXVtz4GspNB_9_8u4V-So4nxfgHCG0PJ04C91Ng",
+        "sheetName": "Generated_Words",
+        "columnToMatchOn": "Date",
+        "options": {
+          "createSheet": true,
+          "headerRow": 1\n        },\n        \"columns\": {\n          \"mappingMode\": \"defineBelow\",\n          \"value\": {\n            \"Date\": \"Date\",\n            \"Original_Word\": \"Original_Word\",\n            \"Category\": \"Category\",\n            \"Dutch_Word\": \"Dutch_Word\",\n            \"English_Word\": \"English_Word\"\n          }\n        }\n      },\n      \"id\": \"update-sheet\",\n      \"name\": \"Update Google Sheet\",\n      \"type\": \"n8n-nodes-base.googleSheets\",\n      \"typeVersion\": 4,\n      \"position\": [\n        1600,\n        300\n      ],\n      \"credentials\": {\n        \"googleSheetsOAuth2Api\": {\n          \"id\": \"YOUR_GOOGLE_SHEETS_CREDENTIAL_ID\",\n          \"name\": \"Google Sheets OAuth2 API\"\n        }\n      }\n    },\n    {\n      \"parameters\": {\n        \"jsCode\": \"// Create Discord embed message\\nconst parseData = $('Parse AI Response').first().json;\\nconst selectedWord = parseData.selectedWord;\\nconst parsedResponse = parseData.parsedResponse;\\nconst currentDate = parseData.currentDate;\\n\\n// Format date for display\\nconst displayDate = new Date(currentDate).toLocaleDateString('en-US', {\\n  year: 'numeric',\\n  month: 'long',\\n  day: 'numeric'\\n});\\n\\n// Build word list for Discord (limit to 8 words)\\nlet wordListText = '';\\nif (parsedResponse.related_words && parsedResponse.related_words.length > 0) {\\n  const wordsToShow = parsedResponse.related_words.slice(0, 8);\\n  for (let i = 0; i < wordsToShow.length; i++) {\\n    const wordPair = wordsToShow[i];\\n    wordListText += `${i + 1}. **${wordPair.english}** → ${wordPair.dutch}\\\\n`;\\n  }\\n} else {\\n  wordListText = 'No words generated today.';\\n}\\n\\n// Create Discord webhook payload\\nconst discordPayload = {\\n  embeds: [{\\n    title: `📚 Daily English Word: ${selectedWord.charAt(0).toUpperCase() + selectedWord.slice(1)}`,\\n    description: `Category: **${parsedResponse.category.charAt(0).toUpperCase() + parsedResponse.category.slice(1)}**`,\\n    color: 3447003, // Blue color\\n    fields: [\\n      {\\n        name: '🇳🇱 Related Words with Dutch Translations',\\n        value: wordListText,\\n        inline: false\\n      }\\n    ],\\n    footer: {\\n      text: `Generated on ${displayDate}`\\n    }\\n  }]\\n};\\n\\n// Add error field if there's an error\\nif (parsedResponse.error) {\\n  discordPayload.embeds[0].fields.push({\\n    name: '⚠️ Note',\\n    value: parsedResponse.error,\\n    inline: false\\n  });\\n}\\n\\nreturn [{\\n  json: discordPayload\\n}];\"\n      },\n      \"id\": \"format-discord\",\n      \"name\": \"Format Discord Message\",\n      \"type\": \"n8n-nodes-base.code\",\n      \"typeVersion\": 2,\n      \"position\": [\n        1820,\n        300\n      ]\n    },\n    {\n      \"parameters\": {\n        \"httpMethod\": \"POST\",\n        \"url\": \"YOUR_DISCORD_WEBHOOK_URL\",\n        \"options\": {\n          \"bodyContentType\": \"json\"\n        },\n        \"bodyParametersJson\": \"={{ $json }}\"\n      },\n      \"id\": \"send-discord\",\n      \"name\": \"Send to Discord\",\n      \"type\": \"n8n-nodes-base.httpRequest\",\n      \"typeVersion\": 4,\n      \"position\": [\n        2040,\n        300\n      ]\n    },\n    {\n      \"parameters\": {\n        \"jsCode\": \"// Log workflow completion\\nconst parseData = $('Parse AI Response').first().json;\\nconst sheetResult = $('Update Google Sheet').all();\\nconst discordResult = $('Send to Discord').first();\\n\\nconst logData = {\\n  timestamp: new Date().toISOString(),\\n  selectedWord: parseData.selectedWord,\\n  category: parseData.parsedResponse.category,\\n  wordsGenerated: parseData.parsedResponse.related_words ? parseData.parsedResponse.related_words.length : 0,\\n  sheetUpdated: sheetResult.length > 0,\\n  discordSent: discordResult.json ? true : false,\\n  errors: parseData.parsedResponse.error || null\\n};\\n\\nconsole.log('Daily Word Workflow Completed:', JSON.stringify(logData, null, 2));\\n\\nreturn [{\\n  json: {\\n    success: true,\\n    log: logData,\\n    finalOutput: {\\n      category: parseData.parsedResponse.category,\\n      related_words: parseData.parsedResponse.related_words || [],\\n      error: parseData.parsedResponse.error || \\\"\\\"\\n    }\\n  }\\n}];\"\n      },\n      \"id\": \"log-results\",\n      \"name\": \"Log Results\",\n      \"type\": \"n8n-nodes-base.code\",\n      \"typeVersion\": 2,\n      \"position\": [\n        2260,\n        300\n      ]\n    }\n  ],\n  \"connections\": {\n    \"Daily Trigger\": {\n      \"main\": [\n        [\n          {\n            \"node\": \"Read English Words\",\n            \"type\": \"main\",\n            \"index\": 0\n          }\n        ]\n      ]\n    },\n    \"Read English Words\": {\n      \"main\": [\n        [\n          {\n            \"node\": \"Select Random Word\",\n            \"type\": \"main\",\n            \"index\": 0\n          }\n        ]\n      ]\n    },\n    \"Select Random Word\": {\n      \"main\": [\n        [\n          {\n            \"node\": \"Generate Related Words\",\n            \"type\": \"main\",\n            \"index\": 0\n          }\n        ]\n      ]\n    },\n    \"Generate Related Words\": {\n      \"main\": [\n        [\n          {\n            \"node\": \"Parse AI Response\",\n            \"type\": \"main\",\n            \"index\": 0\n          }\n        ]\n      ]\n    },\n    \"Parse AI Response\": {\n      \"main\": [\n        [\n          {\n            \"node\": \"Prepare Sheet Data\",\n            \"type\": \"main\",\n            \"index\": 0\n          },\n          {\n            \"node\": \"Format Discord Message\",\n            \"type\": \"main\",\n            \"index\": 0\n          }\n        ]\n      ]\n    },\n    \"Prepare Sheet Data\": {\n      \"main\": [\n        [\n          {\n            \"node\": \"Update Google Sheet\",\n            \"type\": \"main\",\n            \"index\": 0\n          }\n        ]\n      ]\n    },\n    \"Format Discord Message\": {\n      \"main\": [\n        [\n          {\n            \"node\": \"Send to Discord\",\n            \"type\": \"main\",\n            \"index\": 0\n          }\n        ]\n      ]\n    },\n    \"Update Google Sheet\": {\n      \"main\": [\n        [\n          {\n            \"node\": \"Log Results\",\n            \"type\": \"main\",\n            \"index\": 0\n          }\n        ]\n      ]\n    },\n    \"Send to Discord\": {\n      \"main\": [\n        [\n          {\n            \"node\": \"Log Results\",\n            \"type\": \"main\",\n            \"index\": 0\n          }\n        ]\n      ]\n    }\n  },\n  \"pinData\": {},\n  \"settings\": {\n    \"executionOrder\": \"v1\"\n  },\n  \"staticData\": null,\n  \"tags\": [\n    {\n      \"createdAt\": \"2025-01-01T00:00:00.000Z\",\n      \"updatedAt\": \"2025-01-01T00:00:00.000Z\",\n      \"id\": \"daily-automation\",\n      \"name\": \"Daily Automation\"\n    }\n  ],\n  \"triggerCount\": 0,\n  \"updatedAt\": \"2025-01-01T00:00:00.000Z\",\n  \"versionId\": \"1\",\n  \"meta\": {\n    \"templateCredsSetupCompleted\": false\n  },\n  \"configuration_notes\": [\n    \"SETUP REQUIRED:\",\n    \"1. Replace YOUR_DISCORD_WEBHOOK_URL with your actual Discord webhook URL\",\n    \"2. Set up OpenAI credentials in n8n (API key required)\",\n    \"3. Set up Google Sheets credentials in n8n (OAuth2 or Service Account)\",\n    \"4. Update the Google Sheets document ID if different\",\n    \"5. Ensure the source sheet contains English words in column A\",\n    \"6. The workflow will create 'Generated_Words' sheet automatically\",\n    \"7. Cron trigger runs daily at 9:00 AM (0 9 * * *)\",\n    \"8. Test the workflow manually before activating the cron trigger\"\n  ],\n  \"required_n8n_nodes\": [\n    \"@n8n/n8n-nodes-base.cron\",\n    \"@n8n/n8n-nodes-base.googleSheets\",\n    \"@n8n/n8n-nodes-base.openAi\",\n    \"@n8n/n8n-nodes-base.code\",\n    \"@n8n/n8n-nodes-base.httpRequest\"\n  ]\n}"
