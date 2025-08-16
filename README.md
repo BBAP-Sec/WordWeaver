@@ -140,14 +140,7 @@ Feel free to open an issue or submit a pull request!
 
 ---
 
-## 📄 License
-
-MIT License - feel free to use this for your own learning adventures!
-
----
-
 ## ⭐ Show Your Support
 
 If WordWeaver helps you learn new words, give it a star! ⭐
 
-**Happy learning!** 🎓✨
